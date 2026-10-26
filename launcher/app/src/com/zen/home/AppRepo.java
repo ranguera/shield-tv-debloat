@@ -8,11 +8,17 @@ import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Rect;
+import android.graphics.RectF;
 import android.graphics.drawable.Drawable;
 import android.util.DisplayMetrics;
+import android.util.TypedValue;
 
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -62,18 +68,87 @@ final class AppRepo {
                 res = pm.getResourcesForApplication(ai.applicationInfo);
             } catch (PackageManager.NameNotFoundException ignored) { }
             int bannerId = ai.banner != 0 ? ai.banner : ai.applicationInfo.banner;
-            Drawable banner = load(res, bannerId, DisplayMetrics.DENSITY_MEDIUM);
-            Bitmap art;
-            if (banner != null) {
-                art = renderBanner(banner, artW, artH);
+            // Decode the largest authored banner, not the mdpi one. Scaling mdpi (320x180)
+            // up to the tile, then again for 4K output, is what made Netflix and Prime look soft.
+            Bitmap art = null;
+            Bitmap raw = decodeUnscaled(res, bannerId);
+            if (raw != null) {
+                art = blit(raw, artW, artH, true);
             } else {
-                Drawable icon = load(res, e.getValue().getIconResource(), DisplayMetrics.DENSITY_XHIGH);
-                art = renderIcon(icon != null ? icon : e.getValue().loadIcon(pm), artW, artH);
+                Drawable banner = load(res, bannerId, DisplayMetrics.DENSITY_XXXHIGH);
+                if (banner != null) art = renderBanner(banner, artW, artH);
+            }
+            if (art == null) {
+                int iconId = e.getValue().getIconResource();
+                Bitmap iconBmp = decodeUnscaled(res, iconId);
+                if (iconBmp != null) {
+                    art = iconTile(iconBmp, artW, artH);
+                } else {
+                    Drawable icon = load(res, iconId, DisplayMetrics.DENSITY_XXXHIGH);
+                    art = renderIcon(icon != null ? icon : e.getValue().loadIcon(pm), artW, artH);
+                }
             }
             out.add(new App(e.getKey(), new ComponentName(ai.packageName, ai.name), label, art));
         }
         Collections.sort(out, (a, b) -> a.label.compareToIgnoreCase(b.label));
         return out;
+    }
+
+    /** The bitmap file as authored, with no density scaling. Null for XML drawables. */
+    private static Bitmap decodeUnscaled(Resources res, int id) {
+        if (res == null || id == 0) return null;
+        TypedValue value = new TypedValue();
+        try {
+            res.getValueForDensity(id, DisplayMetrics.DENSITY_XXXHIGH, value, true);
+            if (value.string == null) return null;
+            BitmapFactory.Options o = new BitmapFactory.Options();
+            o.inScaled = false;
+            o.inPreferredConfig = Bitmap.Config.ARGB_8888;
+            try (InputStream in = res.openRawResource(id, value)) {
+                return BitmapFactory.decodeStream(in, null, o);
+            }
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** Draw {@code src} into a tile. Center-crops when {@code crop} is set, otherwise fits. */
+    private static Bitmap blit(Bitmap src, int w, int h, boolean crop) {
+        Bitmap out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        out.setDensity(Bitmap.DENSITY_NONE);
+        Canvas c = new Canvas(out);
+        c.drawColor(0xFF1C1C1E);
+        Paint p = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
+        float sx = w / (float) src.getWidth(), sy = h / (float) src.getHeight();
+        float scale = crop ? Math.max(sx, sy) : Math.min(sx, sy);
+        float dw = src.getWidth() * scale, dh = src.getHeight() * scale;
+        float left = (w - dw) / 2f, top = (h - dh) / 2f;
+        c.drawBitmap(src, new Rect(0, 0, src.getWidth(), src.getHeight()),
+                new RectF(left, top, left + dw, top + dh), p);
+        src.recycle();
+        return out;
+    }
+
+    private static Bitmap iconTile(Bitmap icon, int w, int h) {
+        int tint = tintFor(icon);
+        Bitmap out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        out.setDensity(Bitmap.DENSITY_NONE);
+        Canvas c = new Canvas(out);
+        c.drawColor(tint);
+        Paint p = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
+        int s = (int) (h * 0.58f);
+        float left = (w - s) / 2f, top = (h - s) / 2f;
+        c.drawBitmap(icon, new Rect(0, 0, icon.getWidth(), icon.getHeight()),
+                new RectF(left, top, left + s, top + s), p);
+        icon.recycle();
+        return out;
+    }
+
+    private static int tintFor(Bitmap icon) {
+        Bitmap small = Bitmap.createScaledBitmap(icon, 12, 12, true);
+        int tint = tintFrom(small);
+        if (small != icon) small.recycle();
+        return tint;
     }
 
     private static Drawable load(Resources res, int id, int density) {
@@ -87,6 +162,7 @@ final class AppRepo {
 
     private static Bitmap renderBanner(Drawable d, int w, int h) {
         Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        b.setDensity(Bitmap.DENSITY_NONE);
         Canvas c = new Canvas(b);
         c.drawColor(0xFF1C1C1E);
         d.setBounds(0, 0, w, h);
@@ -97,6 +173,7 @@ final class AppRepo {
     /** Apps without a TV banner: icon centred on a tile tinted from the icon's own colour. */
     private static Bitmap renderIcon(Drawable icon, int w, int h) {
         Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        b.setDensity(Bitmap.DENSITY_NONE);
         Canvas c = new Canvas(b);
         c.drawColor(tintFor(icon));
         int s = (int) (h * 0.58f);
@@ -110,15 +187,20 @@ final class AppRepo {
         Bitmap small = Bitmap.createBitmap(12, 12, Bitmap.Config.ARGB_8888);
         icon.setBounds(0, 0, 12, 12);
         icon.draw(new Canvas(small));
+        int tint = tintFrom(small);
+        small.recycle();
+        return tint;
+    }
+
+    private static int tintFrom(Bitmap small) {
         long r = 0, g = 0, bl = 0, n = 0;
         for (int y = 0; y < 12; y++) {
             for (int x = 0; x < 12; x++) {
                 int p = small.getPixel(x, y);
                 if (Color.alpha(p) < 128) continue;
-                r += Color.red(p); g += Color.green(p); bl += Color.blue(p); n++;
+                r += Color.red(p); g += Color.green(p);                 bl += Color.blue(p); n++;
             }
         }
-        small.recycle();
         if (n == 0) return 0xFF2C2C2E;
         float[] hsv = new float[3];
         Color.RGBToHSV((int) (r / n), (int) (g / n), (int) (bl / n), hsv);

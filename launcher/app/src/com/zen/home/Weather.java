@@ -116,7 +116,7 @@ final class Weather {
         long age = System.currentTimeMillis() - prefs.getLong("wx_time", 0);
         if (age < 0 || age > KEEP) return null;
         String js = prefs.getString("wx_json", null);
-        if (js == null) return null;
+        if (js == null || js.contains("°F")) return null;
         return parse(js, prefs.getString("wx_city", ""));
     }
 
@@ -229,12 +229,11 @@ final class Weather {
     }
 
     private String forecastUrl() {
-        String unit = "US".equals(Locale.getDefault().getCountry()) ? "&temperature_unit=fahrenheit" : "";
         return "https://api.open-meteo.com/v1/forecast?latitude=" + prefs.getString("wx_lat", "0")
                 + "&longitude=" + prefs.getString("wx_lon", "0")
                 + "&current=temperature_2m,weather_code,is_day"
                 + "&daily=weather_code,temperature_2m_max,temperature_2m_min"
-                + "&timezone=auto&forecast_days=3" + unit;
+                + "&timezone=auto&forecast_days=3";
     }
 
     private static Snapshot parse(String body, String place) {

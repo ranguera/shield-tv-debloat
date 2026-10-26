@@ -262,6 +262,12 @@ function Invoke-ShieldSetup {
         if ($DryRun) { Write-Host "  [dry-run] adb install -r $apk" } else {
             $out = Adb install -r $apk
             $out | Write-Host
+            if ($out -match 'INSTALL_FAILED_UPDATE_INCOMPATIBLE') {
+                Warn "Replacing the installed Zen Home (its signature differs, so its saved dock layout is reset)."
+                Adb uninstall com.zen.home | Write-Host
+                $out = Adb install -r $apk
+                $out | Write-Host
+            }
             if (-not ($out -match 'Success')) { throw "Installing Zen Home failed." }
         }
         Run cmd package set-home-activity --user 0 $ZenHome

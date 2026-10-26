@@ -20,7 +20,7 @@ final class TileCache {
     private TileCache() { }
 
     static File dir(Context c) {
-        return new File(c.getCacheDir(), "tiles");
+        return new File(c.getCacheDir(), "tiles-hi");
     }
 
     static List<AppRepo.App> read(Context c) {

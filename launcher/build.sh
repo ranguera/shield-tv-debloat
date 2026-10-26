@@ -4,8 +4,18 @@ set -euo pipefail
 cd "$(dirname "$0")"
 SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}"
 BT="$SDK/build-tools/35.0.1"
+if [ ! -x "$BT/aapt2" ]; then
+  BT="$(find "$SDK/build-tools" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
+fi
 JAR="$SDK/platforms/android-30/android.jar"
 [ -f "$JAR" ] || JAR="$SDK/platforms/android-33/android.jar"
+if [ ! -f "$JAR" ]; then
+  JAR="$(find "$SDK/platforms" -name android.jar 2>/dev/null | sort | tail -1)"
+fi
+if [ ! -x "${BT:-}/aapt2" ] || [ ! -f "${JAR:-}" ]; then
+  echo "Android SDK not found. Set ANDROID_HOME (need build-tools and a platforms/android-*/android.jar)." >&2
+  exit 1
+fi
 OUT=build
 APP=app
 

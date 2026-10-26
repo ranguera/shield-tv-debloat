@@ -36,7 +36,21 @@ step "Disabling telemetry and bloat"
 
 step "Installing Zen Home"
 if [ "$DRY_RUN" = 1 ]; then say "  [dry-run] adb install -r $APK"
-else adb install -r "$APK" </dev/null; fi
+else
+  # A locally built APK is signed with this machine's key. If an older Zen Home
+  # signed with another key is already installed, Android refuses the update.
+  install_out="$(adb install -r "$APK" </dev/null 2>&1 || true)"
+  printf '%s\n' "$install_out"
+  if ! printf '%s\n' "$install_out" | grep -q Success; then
+    if printf '%s\n' "$install_out" | grep -q INSTALL_FAILED_UPDATE_INCOMPATIBLE; then
+      warn "Replacing the installed Zen Home (its signature differs, so its saved dock layout is reset)."
+      adb uninstall com.zen.home </dev/null || true
+      adb install -r "$APK" </dev/null
+    else
+      die "Installing Zen Home failed."
+    fi
+  fi
+fi
 shell_run cmd package set-home-activity --user 0 "$HOME_ACTIVITY"
 
 step "Disabling the stock launcher and its ad feed"

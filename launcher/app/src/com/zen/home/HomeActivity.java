@@ -68,7 +68,7 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
 
     private float density;
     private int screenW, screenH, tileW, tileH, gap, side, headerH;
-    private int dockW, dockH, dockSlotW, dockSlotH, dockGap, dockPadX, dockPadY, dockViewportW;
+    private int dockW, dockH, dockSlotW, dockSlotH, dockGap, dockPadX, dockPadY, dockInset, dockViewportW;
     private int dockRows = 1;
     private SharedPreferences prefs;
 
@@ -85,7 +85,7 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
     private View dockPanel;
     private WideLayout dockRow;
     private LinearLayout grid;
-    private TextView captionTitle, captionCredit, dockEmpty, dockName, greeting, moveHint;
+    private TextView captionTitle, captionCredit, dockEmpty, dockName, greeting, clockView, moveHint;
     private Weather weather;
     private FrameLayout weatherHost;
     private LinearLayout weatherBody;
@@ -145,11 +145,13 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
         tileH = Math.round(tileW * 9f / 16f);
         gap = dp(18);
         side = Math.max(dp(32), (screenW - (COLUMNS * tileW + (COLUMNS - 1) * gap)) / 2);
-        dockGap = dp(14);
+        dockGap = dp(12);
         // Room inside the glass so an enlarged end tile never reaches the panel's rounded corners.
-        dockPadX = dp(22);
-        dockPadY = dp(14);
-        dockViewportW = screenW - 2 * side - 2 * dockPadX;
+        dockPadX = dp(18);
+        dockPadY = dp(10);
+        // Extra inset so the two favorite bars, and the tiles in them, sit a little smaller than the grid.
+        dockInset = dp(56);
+        dockViewportW = screenW - 2 * side - 2 * dockPadX - 2 * dockInset;
         headerH = dp(150);
         sizeDock(dockTileColumns(DEFAULT_DOCK.length), dockRowCount(DEFAULT_DOCK.length));
         hidden.addAll(split(prefs.getString("hidden", "")));
@@ -228,11 +230,22 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
         super.onStop();
     }
 
+    private void refreshGreeting() {
+        java.util.Calendar c = java.util.Calendar.getInstance();
+        int h = c.get(java.util.Calendar.HOUR_OF_DAY);
+        if (greeting != null) {
+            greeting.setText(h < 5 ? "Good night" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening");
+        }
+        if (clockView != null) {
+            clockView.setText(String.format(java.util.Locale.US, "%02d:%02d", h, c.get(java.util.Calendar.MINUTE)));
+        }
+    }
+
     private final Runnable greetingTick = new Runnable() {
         @Override public void run() {
-            int h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
-            greeting.setText(h < 5 ? "Good night" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening");
-            main.postDelayed(this, 60_000);
+            refreshGreeting();
+            int sec = java.util.Calendar.getInstance().get(java.util.Calendar.SECOND);
+            main.postDelayed(this, (60 - sec) * 1000L);
         }
     };
 
@@ -288,22 +301,29 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
         clock.setClipChildren(false);
         greeting = text("", 9.5f, 0xD9FFFFFF, "sans-serif-medium");
         caps(greeting, 0.2f);
-        TextClock time = new TextClock(this);
-        // Both patterns are 24-hour, so the clock stays on military time even if the
-        // SHIELD itself is set to 12-hour.
-        time.setFormat12Hour("HH:mm");
-        time.setFormat24Hour("HH:mm");
-        style(time, 64, 0xFFFFFFFF, "sans-serif-thin");
+        // TextClock lays itself out a digit too narrow for some hours, so "13:41" draws as
+        // "13:4". This clock measures its own text and refuses a tighter width.
+        clockView = new TextView(this) {
+            @Override protected void onMeasure(int w, int h) {
+                super.onMeasure(View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+                        View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+            }
+        };
+        style(clockView, 64, 0xFFFFFFFF, "sans-serif-thin");
+        clockView.setPadding(0, 0, dp(12), 0);
+        clockView.setSingleLine(true);
         TextClock date = new TextClock(this);
         date.setFormat12Hour("EEEE d MMMM");
         date.setFormat24Hour("EEEE d MMMM");
         style(date, 9.5f, 0xD9FFFFFF, "sans-serif-medium");
         caps(date, 0.15f);
-        for (TextView t : new TextView[] { greeting, time, date }) t.setShadowLayer(dp(6), 0, dp(1), 0x66000000);
+        for (TextView t : new TextView[] { greeting, clockView, date }) t.setShadowLayer(dp(6), 0, dp(1), 0x66000000);
+        refreshGreeting();
 
         LinearLayout timeCol = new LinearLayout(this);
         timeCol.setOrientation(LinearLayout.VERTICAL);
-        timeCol.addView(time);
+        timeCol.setClipChildren(false);
+        timeCol.addView(clockView);
         LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(-2, -2);
         dl.topMargin = dp(4);
         timeCol.addView(date, dl);
@@ -315,7 +335,8 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
         timeRow.setClipChildren(false);
         timeRow.addView(timeCol);
         LinearLayout.LayoutParams wl = new LinearLayout.LayoutParams(-2, -2);
-        wl.leftMargin = dp(28);
+        // Clear of the clock: a wide hour (20:xx) otherwise loses the last minute digit under the forecast.
+        wl.leftMargin = dp(72);
         timeRow.addView(buildWeather(), wl);
 
         clock.addView(greeting);
@@ -362,8 +383,8 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
         caption.addView(captionCredit, cc);
         nameRow.addView(caption, new FrameLayout.LayoutParams(-2, -2, Gravity.END | Gravity.BOTTOM));
         LinearLayout.LayoutParams nl = new LinearLayout.LayoutParams(-1, -2);
-        nl.leftMargin = side + dp(4);
-        nl.rightMargin = side + dp(4);
+        nl.leftMargin = side + dockInset + dp(4);
+        nl.rightMargin = side + dockInset + dp(4);
         nl.bottomMargin = dp(12);
         bottom.addView(nameRow, nl);
 
@@ -396,8 +417,8 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
         // enlarged end tile loses its rounded outer corners.
         panel.setClipChildren(false);
         LinearLayout.LayoutParams pl = new LinearLayout.LayoutParams(-1, dockPanelHeight());
-        pl.leftMargin = side;
-        pl.rightMargin = side;
+        pl.leftMargin = side + dockInset;
+        pl.rightMargin = side + dockInset;
         bottom.addView(panel, pl);
         dockPanel = panel;
 
@@ -716,7 +737,7 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
         int chrome = dp(78);
         int availH = screenH - headerH - chrome - 2 * dockPadY - Math.max(0, dockRows - 1) * dockGap;
         int maxH = Math.max(dp(48), availH / dockRows - ring);
-        int cap = Math.min(dp(150), Math.round(maxH * 16f / 9f));
+        int cap = Math.min(dp(112), Math.round(maxH * 16f / 9f));
         dockW = Math.max(dp(72), Math.min(cap, w));
         dockH = Math.round(dockW * 9f / 16f);
         dockSlotW = dockW + ring;
@@ -850,8 +871,8 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
     private void refreshTiles() {
         try {
             startService(new Intent(this, TileLoaderService.class)
-                    .putExtra(TileLoaderService.EXTRA_W, Math.round(tileW * AppTile.FOCUS_SCALE))
-                    .putExtra(TileLoaderService.EXTRA_H, Math.round(tileH * AppTile.FOCUS_SCALE)));
+                    .putExtra(TileLoaderService.EXTRA_W, Math.round(tileW * AppTile.FOCUS_SCALE * 2))
+                    .putExtra(TileLoaderService.EXTRA_H, Math.round(tileH * AppTile.FOCUS_SCALE * 2)));
             tilesStale = false;
         } catch (RuntimeException e) {
             tilesStale = true; // background-start restriction; retried in onStart()
