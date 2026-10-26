@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One-line installer for macOS and Linux:
 #
-#   curl -fsSL https://raw.githubusercontent.com/Ablykt/shield-tv-debloat/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/ranguera/shield-tv-debloat/main/install.sh | bash
 #
 # Downloads this project to ~/shield-tv-debloat (earlier backups there are kept) and starts the
 # guided setup. Options go after `bash -s --`, e.g. `... | bash -s -- --restore`; see
@@ -9,7 +9,7 @@
 set -euo pipefail
 
 main() {
-  local repo="${SHIELD_REPO:-Ablykt/shield-tv-debloat}" dir
+  local repo="${SHIELD_REPO:-ranguera/shield-tv-debloat}" dir
   if [ -f "${BASH_SOURCE[0]:-}" ] && [ -f "$(dirname "${BASH_SOURCE[0]}")/scripts/setup.sh" ]; then
     dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   else

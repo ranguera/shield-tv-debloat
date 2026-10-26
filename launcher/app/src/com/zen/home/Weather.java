@@ -29,10 +29,10 @@ import java.util.concurrent.Executors;
 /**
  * Current conditions plus a three-day forecast (today and the next two days).
  *
- * Coordinates come from a typed city (Open-Meteo geocoding) or, until one is set, from
- * the network address via BigDataCloud. The forecast itself is Open-Meteo, which needs
- * no key. Both calls happen only while Home is on screen, at most every half hour, and
- * the last good forecast is kept for six hours so a blip doesn't blank the widget.
+ * The forecast is Mataró, Spain, until a different city is typed in the dialog
+ * (Open-Meteo geocoding). The forecast itself is Open-Meteo, which needs no key.
+ * Calls happen only while Home is on screen, at most every half hour, and the last
+ * good forecast is kept for six hours so a blip doesn't blank the widget.
  * Open-Meteo data is CC BY 4.0; the city dialog credits it.
  */
 final class Weather {
@@ -75,9 +75,17 @@ final class Weather {
         void failed();
     }
 
-    private static final String UA = "ZenHome/1.1 (Android TV; +https://github.com/Ablykt/shield-tv-debloat)";
+    private static final String UA = "ZenHome/1.1 (Android TV; +https://github.com/ranguera/shield-tv-debloat)";
     private static final long FRESH = 30 * 60_000L;
     private static final long KEEP = 6 * 60 * 60_000L;
+
+    /** Open-Meteo geocoding result for Mataró, Catalonia, Spain. */
+    private static final String DEFAULT_CITY = "Mataró";
+    private static final String DEFAULT_LABEL = "Mataró, Spain";
+    private static final String DEFAULT_LAT = "41.54211";
+    private static final String DEFAULT_LON = "2.4445";
+    /** Bump to replace a previously saved place (including an old IP guess) with the default. */
+    private static final int PLACE_REV = 1;
 
     private final SharedPreferences prefs;
     private final Handler main;
@@ -89,6 +97,7 @@ final class Weather {
     Weather(SharedPreferences prefs, Handler main) {
         this.prefs = prefs;
         this.main = main;
+        ensureDefaultPlace();
     }
 
     void setListener(Listener listener) {
@@ -141,6 +150,7 @@ final class Weather {
                             .putString("wx_label", p.label)
                             .putString("wx_lat", Double.toString(p.lat))
                             .putString("wx_lon", Double.toString(p.lon))
+                            .putInt("wx_place_rev", PLACE_REV)
                             .remove("wx_json")
                             .remove("wx_time")
                             .apply();
@@ -159,15 +169,11 @@ final class Weather {
 
     private void load(int g) {
         if (g != fetchGen || closed) return;
-        if (!hasCoords()) {
-            boolean found = lookupIp(g);
-            if (g != fetchGen || closed) return;
-            if (!found && !hasCoords()) {
-                post(g, null);
-                return;
-            }
+        ensureDefaultPlace();
+        if (g != fetchGen || closed || !hasCoords()) {
+            post(g, null);
+            return;
         }
-        if (g != fetchGen || closed) return;
         String body = httpGet(forecastUrl());
         if (g != fetchGen || closed) return;
         if (body != null && body.contains("\"current\"")) {
@@ -189,30 +195,18 @@ final class Weather {
         return prefs.contains("wx_lat") && prefs.contains("wx_lon");
     }
 
-    /** Guess a city from the network address. One request, then it is remembered. */
-    private boolean lookupIp(int g) {
-        String body = httpGet("https://api.bigdatacloud.net/data/reverse-geocode-client?localityLanguage=en");
-        if (body == null || g != fetchGen || closed || hasCoords()) return false;
-        try {
-            JSONObject o = new JSONObject(body);
-            String city = o.optString("city", "");
-            if (city.isEmpty()) city = o.optString("locality", "");
-            double lat = o.getDouble("latitude");
-            double lon = o.getDouble("longitude");
-            if (city.isEmpty() || !valid(lat, lon)) return false;
-            String country = o.optString("countryName", "");
-            String label = country.isEmpty() ? city : city + ", " + country;
-            if (g != fetchGen || closed || hasCoords()) return false;
-            prefs.edit()
-                    .putString("wx_city", city)
-                    .putString("wx_label", label)
-                    .putString("wx_lat", Double.toString(lat))
-                    .putString("wx_lon", Double.toString(lon))
-                    .apply();
-            return true;
-        } catch (Exception e) {
-            return false;
-        }
+    /** First launch, and any saved place from before this default, uses Mataró. */
+    private void ensureDefaultPlace() {
+        if (prefs.getInt("wx_place_rev", 0) >= PLACE_REV && hasCoords()) return;
+        prefs.edit()
+                .putString("wx_city", DEFAULT_CITY)
+                .putString("wx_label", DEFAULT_LABEL)
+                .putString("wx_lat", DEFAULT_LAT)
+                .putString("wx_lon", DEFAULT_LON)
+                .putInt("wx_place_rev", PLACE_REV)
+                .remove("wx_json")
+                .remove("wx_time")
+                .apply();
     }
 
     private Place geocode(String name) {

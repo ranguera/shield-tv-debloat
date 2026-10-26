@@ -34,13 +34,13 @@ This lets your computer talk to the SHIELD. You only do it once.
 **Mac or Linux:** open the **Terminal** app, paste this line and press Enter:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Ablykt/shield-tv-debloat/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ranguera/shield-tv-debloat/main/install.sh | bash
 ```
 
 **Windows:** open **PowerShell** (Start menu → type *PowerShell*), paste this line and press Enter:
 
 ```powershell
-irm https://raw.githubusercontent.com/Ablykt/shield-tv-debloat/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/ranguera/shield-tv-debloat/main/install.ps1 | iex
 ```
 
 The installer finds your SHIELD on the network automatically. If it can't, it asks for the IP
@@ -89,13 +89,13 @@ To keep them, or anything else on the [list](scripts/debloat-list.txt):
 **Mac / Linux:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Ablykt/shield-tv-debloat/main/install.sh | bash -s -- --keep com.google.android.tv,com.nvidia.nvgamecast
+curl -fsSL https://raw.githubusercontent.com/ranguera/shield-tv-debloat/main/install.sh | bash -s -- --keep com.google.android.tv,com.nvidia.nvgamecast
 ```
 
 **Windows:**
 
 ```powershell
-$env:SHIELD_KEEP = "com.google.android.tv,com.nvidia.nvgamecast"; irm https://raw.githubusercontent.com/Ablykt/shield-tv-debloat/main/install.ps1 | iex
+$env:SHIELD_KEEP = "com.google.android.tv,com.nvidia.nvgamecast"; irm https://raw.githubusercontent.com/ranguera/shield-tv-debloat/main/install.ps1 | iex
 ```
 
 ---
@@ -135,9 +135,7 @@ SHIELD TV models on the same software should work: packages a model doesn't have
   Android 11 has no runtime shaders, so the lens is baked per pixel off the UI thread.
 - Apple TV-style focus: tiles spring larger, lift onto a shadow, tilt toward the direction you
   moved and catch a sheen. No borders.
-- Navigation sounds (tick / tock / bump), synthesized by `launcher/tools/make_sounds.py`. They
-  follow the SHIELD's *System sounds* switch. The HDMI audio link is kept awake while Home is on
-  screen; otherwise TVs and soundbars swallow 30 ms clicks.
+- No navigation or click sounds. Android's own focus clicks are muted too.
 - App tiles are rendered in a short-lived `:tiles` process, so other apps' resource tables
   never sit in the launcher's memory.
 
@@ -205,7 +203,7 @@ launcher/build.sh                   # build the APK yourself (no Gradle needed)
 
 The scripts remember the SHIELD's address in `.shield-address`; `ANDROID_SERIAL=<ip>:5555`
 overrides it. `apply.sh` installs `launcher/build/ZenHome.apk` if you built one, otherwise the
-APK from the [latest release](https://github.com/Ablykt/shield-tv-debloat/releases/latest).
+APK from the [latest release](https://github.com/ranguera/shield-tv-debloat/releases/latest).
 
 **Building Zen Home** needs the Android SDK (`build-tools/35.0.1`, an `android-30` or
 `android-33` platform; set `ANDROID_HOME` if it's not in `~/Library/Android/sdk`) and a JDK

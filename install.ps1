@@ -1,6 +1,6 @@
 # One-line installer for Windows. In PowerShell:
 #
-#   irm https://raw.githubusercontent.com/Ablykt/shield-tv-debloat/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/ranguera/shield-tv-debloat/main/install.ps1 | iex
 #
 # Same steps as scripts/setup.sh on macOS/Linux: downloads adb if needed, finds the SHIELD,
 # backs it up, then debloats / installs Zen Home / undoes everything. Works in a folder at
@@ -14,7 +14,7 @@ function Invoke-ShieldSetup {
     $ProgressPreference = 'SilentlyContinue'   # Invoke-WebRequest is very slow with it on
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-    $Repo = if ($env:SHIELD_REPO) { $env:SHIELD_REPO } else { 'Ablykt/shield-tv-debloat' }
+    $Repo = if ($env:SHIELD_REPO) { $env:SHIELD_REPO } else { 'ranguera/shield-tv-debloat' }
     $Raw = "https://raw.githubusercontent.com/$Repo/main"
     $ApkUrl = "https://github.com/$Repo/releases/latest/download/ZenHome.apk"
     $StockHome = 'com.google.android.tvlauncher/.MainActivity'

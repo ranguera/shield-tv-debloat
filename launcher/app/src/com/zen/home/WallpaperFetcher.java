@@ -64,7 +64,7 @@ public final class WallpaperFetcher extends JobService {
     private static final String API = "https://commons.wikimedia.org/w/api.php";
     private static final String GALLERIES = "Featured pictures/Places/Natural";
     // Wikimedia asks API clients to identify themselves.
-    private static final String UA = "ZenHome/1.1 (https://github.com/Ablykt/shield-tv-debloat)";
+    private static final String UA = "ZenHome/1.1 (https://github.com/ranguera/shield-tv-debloat)";
 
     private static final AtomicBoolean busy = new AtomicBoolean();
     private volatile boolean stopped;

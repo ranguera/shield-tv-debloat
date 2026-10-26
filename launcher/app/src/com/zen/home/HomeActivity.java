@@ -189,7 +189,7 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
         root.addView(moveHint, hl);
 
         setContentView(root);
-        // Zen Home plays its own Apple TV-style sounds; mute Android's default focus clicks.
+        // Mute Android's default focus clicks. Zen Home does not play its own.
         getWindow().getDecorView().setSoundEffectsEnabled(false);
         root.getViewTreeObserver().addOnGlobalFocusChangeListener((oldF, newF) -> onFocusMoved(newF));
 
@@ -1215,7 +1215,7 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
                 return true;
             }
         }
-        // Navigation sounds: tick when focus actually moves, bump when an arrow goes nowhere.
+        // Focus movement and edge bumps stay silent.
         boolean arrow = e.getAction() == KeyEvent.ACTION_DOWN && isArrow(code);
         View before = getCurrentFocus();
         boolean handled = super.dispatchKeyEvent(e);

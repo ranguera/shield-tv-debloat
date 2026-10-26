@@ -11,7 +11,7 @@
 COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(dirname "$COMMON_DIR")"
 ADDRESS_FILE="$ROOT/.shield-address"
-REPO="${SHIELD_REPO:-Ablykt/shield-tv-debloat}"
+REPO="${SHIELD_REPO:-ranguera/shield-tv-debloat}"
 APK_URL="https://github.com/$REPO/releases/latest/download/ZenHome.apk"
 DRY_RUN="${DRY_RUN:-0}"
 
