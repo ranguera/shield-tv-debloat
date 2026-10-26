@@ -17,6 +17,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
+import android.text.InputType;
 import android.text.TextUtils;
 import android.util.DisplayMetrics;
 import android.util.TypedValue;
@@ -27,6 +28,8 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
 import android.view.animation.DecelerateInterpolator;
+import android.view.inputmethod.EditorInfo;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -56,14 +59,17 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
             "com.plexapp.android",
     };
     private static final int COLUMNS = 6;
+    /** Favorites per dock row. A seventh app wraps; past twelve the two rows scroll. */
+    private static final int DOCK_PER_ROW = 6;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final DecelerateInterpolator ease = new DecelerateInterpolator(2f);
 
     private float density;
-    private int screenW, screenH, tileW, tileH, gap, side;
+    private int screenW, screenH, tileW, tileH, gap, side, headerH;
     private int dockW, dockH, dockSlotW, dockSlotH, dockGap, dockPadX, dockPadY, dockViewportW;
+    private int dockRows = 1;
     private SharedPreferences prefs;
 
     private WallpaperView wall;
@@ -71,7 +77,8 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
     private TallLayout content;
     private static final int GLASS_RADIUS = 30;
     private static final int TOP_SCRIM = 0x8C000000, TOP_SCRIM_DP = 210;
-    private static final int BOTTOM_SCRIM = 0x80000000, BOTTOM_SCRIM_DP = 220;
+    // Tall enough to sit behind the two-row dock and the app name above it.
+    private static final int BOTTOM_SCRIM = 0x80000000, BOTTOM_SCRIM_DP = 330;
     private GlassView glass;
     /** Every glass element on screen (dock + pills); all re-bake when the wallpaper changes. */
     private final List<GlassView> glasses = new ArrayList<>();
@@ -79,6 +86,14 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
     private WideLayout dockRow;
     private LinearLayout grid;
     private TextView captionTitle, captionCredit, dockEmpty, dockName, greeting, moveHint;
+    private Weather weather;
+    private FrameLayout weatherHost;
+    private LinearLayout weatherBody;
+    private TextView weatherFallback, wxNowTemp, wxNowCond, wxPlace;
+    private ImageView wxNowIcon;
+    private final ImageView[] wxDayIcon = new ImageView[3];
+    private final TextView[] wxDayLabel = new TextView[3];
+    private final TextView[] wxDayRange = new TextView[3];
 
     private final Map<String, AppRepo.App> apps = new LinkedHashMap<>();
     private final List<String> dock = new ArrayList<>();
@@ -119,6 +134,8 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         prefs = getSharedPreferences("zen", MODE_PRIVATE);
+        weather = new Weather(prefs, main);
+        weather.setListener(this::bindWeather);
         sounds = new Sounds(this);
         DisplayMetrics m = getResources().getDisplayMetrics();
         density = m.density;
@@ -133,7 +150,8 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
         dockPadX = dp(22);
         dockPadY = dp(14);
         dockViewportW = screenW - 2 * side - 2 * dockPadX;
-        sizeDock(DEFAULT_DOCK.length);
+        headerH = dp(150);
+        sizeDock(dockTileColumns(DEFAULT_DOCK.length), dockRowCount(DEFAULT_DOCK.length));
         hidden.addAll(split(prefs.getString("hidden", "")));
 
         FrameLayout root = new FrameLayout(this);
@@ -197,12 +215,14 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
         WallpaperFetcher.schedule(this);
         sounds.wake();
         greetingTick.run();
+        weatherTick.run();
         if (tilesStale) refreshTiles();
     }
 
     @Override protected void onStop() {
         started = false;
         main.removeCallbacks(greetingTick);
+        main.removeCallbacks(weatherTick);
         sounds.sleep();
         wall.stop();
         super.onStop();
@@ -216,10 +236,19 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
         }
     };
 
+    private final Runnable weatherTick = new Runnable() {
+        @Override public void run() {
+            if (!started || weather == null) return;
+            weather.refresh(false);
+            main.postDelayed(this, 30 * 60_000L);
+        }
+    };
+
     @Override protected void onDestroy() {
         unregisterReceiver(packagesChanged);
         unregisterReceiver(tilesReady);
         unregisterReceiver(wallpapersReady);
+        if (weather != null) weather.close();
         io.shutdownNow();
         sounds.release();
         super.onDestroy();
@@ -243,8 +272,12 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
     // ------------------------------------------------------------------ layout
 
     private void buildChrome() {
-        // Header: greeting, big clock and date on the left; Search / Settings pills on the right.
-        FrameLayout header = new FrameLayout(this);
+        // Header: greeting, 24-hour clock and date on the left, weather beside the time,
+        // Search / Settings pills on the right.
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.TOP);
+        header.setBaselineAligned(false);
         header.setClipChildren(false);
         // The pills sit on the padding edge; let a focused (enlarged) pill draw past it.
         header.setClipToPadding(false);
@@ -252,10 +285,13 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
 
         LinearLayout clock = new LinearLayout(this);
         clock.setOrientation(LinearLayout.VERTICAL);
+        clock.setClipChildren(false);
         greeting = text("", 9.5f, 0xD9FFFFFF, "sans-serif-medium");
         caps(greeting, 0.2f);
         TextClock time = new TextClock(this);
-        time.setFormat12Hour("h:mm");
+        // Both patterns are 24-hour, so the clock stays on military time even if the
+        // SHIELD itself is set to 12-hour.
+        time.setFormat12Hour("HH:mm");
         time.setFormat24Hour("HH:mm");
         style(time, 64, 0xFFFFFFFF, "sans-serif-thin");
         TextClock date = new TextClock(this);
@@ -264,14 +300,30 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
         style(date, 9.5f, 0xD9FFFFFF, "sans-serif-medium");
         caps(date, 0.15f);
         for (TextView t : new TextView[] { greeting, time, date }) t.setShadowLayer(dp(6), 0, dp(1), 0x66000000);
-        clock.addView(greeting);
-        LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(-2, -2);
-        tl.topMargin = dp(2);
-        clock.addView(time, tl);
+
+        LinearLayout timeCol = new LinearLayout(this);
+        timeCol.setOrientation(LinearLayout.VERTICAL);
+        timeCol.addView(time);
         LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(-2, -2);
         dl.topMargin = dp(4);
-        clock.addView(date, dl);
-        header.addView(clock, new FrameLayout.LayoutParams(-2, -2, Gravity.START | Gravity.TOP));
+        timeCol.addView(date, dl);
+
+        LinearLayout timeRow = new LinearLayout(this);
+        timeRow.setOrientation(LinearLayout.HORIZONTAL);
+        timeRow.setGravity(Gravity.CENTER_VERTICAL);
+        timeRow.setBaselineAligned(false);
+        timeRow.setClipChildren(false);
+        timeRow.addView(timeCol);
+        LinearLayout.LayoutParams wl = new LinearLayout.LayoutParams(-2, -2);
+        wl.leftMargin = dp(28);
+        timeRow.addView(buildWeather(), wl);
+
+        clock.addView(greeting);
+        LinearLayout.LayoutParams tr = new LinearLayout.LayoutParams(-2, -2);
+        tr.topMargin = dp(2);
+        clock.addView(timeRow, tr);
+        header.addView(clock, new LinearLayout.LayoutParams(-2, -2));
+        header.addView(new View(this), new LinearLayout.LayoutParams(0, 0, 1f));
 
         LinearLayout pills = new LinearLayout(this);
         pills.setOrientation(LinearLayout.HORIZONTAL);
@@ -280,8 +332,7 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
         View s = pill(R.drawable.ic_settings, "Settings", v -> safeStart(new Intent(Settings.ACTION_SETTINGS)));
         ((LinearLayout.LayoutParams) s.getLayoutParams()).leftMargin = dp(10);
         pills.addView(s);
-        header.addView(pills, new FrameLayout.LayoutParams(-2, -2, Gravity.END | Gravity.TOP));
-        int headerH = dp(150);
+        header.addView(pills, new LinearLayout.LayoutParams(-2, -2));
         content.addView(header, new LinearLayout.LayoutParams(-1, headerH));
 
         // Stage: the rest of the first screen. The dock is anchored to its bottom edge with the
@@ -321,8 +372,9 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
         panel.addView(glass, new FrameLayout.LayoutParams(-1, -1));
         FrameLayout viewport = new FrameLayout(this);
         viewport.setClipChildren(false);
+        // Vertical, as wide as its rows: favorites wrap onto a second line and both scroll together.
         dockRow = new WideLayout(this);
-        dockRow.setOrientation(LinearLayout.HORIZONTAL);
+        dockRow.setOrientation(LinearLayout.VERTICAL);
         dockRow.setClipChildren(false);
         viewport.addView(dockRow, new FrameLayout.LayoutParams(-2, -2));
         FrameLayout.LayoutParams vp = new FrameLayout.LayoutParams(-1, -2);
@@ -343,7 +395,7 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
         // The outline above frames the dock; don't also trim the row to its rectangle, or an
         // enlarged end tile loses its rounded outer corners.
         panel.setClipChildren(false);
-        LinearLayout.LayoutParams pl = new LinearLayout.LayoutParams(-1, dockSlotH + 2 * dockPadY);
+        LinearLayout.LayoutParams pl = new LinearLayout.LayoutParams(-1, dockPanelHeight());
         pl.leftMargin = side;
         pl.rightMargin = side;
         bottom.addView(panel, pl);
@@ -383,12 +435,289 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
         content.addView(help, hp);
     }
 
-    /** Dock tiles grow to fill the glass panel, up to Apple-ish size; past ~7 apps the row scrolls. */
-    private void sizeDock(int count) {
-        int n = Math.max(1, count);
+    /**
+     * Current conditions beside the clock, then today and the next two days.
+     * OK on the widget sets the city; until then the place is guessed from the network.
+     */
+    private View buildWeather() {
+        weatherHost = new FrameLayout(this);
+        weatherHost.setClipChildren(false);
+        weatherHost.setPadding(dp(12), dp(6), dp(12), dp(6));
+        weatherHost.setFocusable(true);
+        weatherHost.setClickable(true);
+        weatherHost.setSoundEffectsEnabled(false);
+        weatherHost.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);
+        weatherHost.setBackground(round(0x00000000, dp(16)));
+        weatherHost.setOnFocusChangeListener((v, has) -> {
+            weatherHost.setBackground(round(has ? 0x2EFFFFFF : 0x00000000, dp(16)));
+            weatherHost.animate().scaleX(has ? 1.04f : 1f).scaleY(has ? 1.04f : 1f).setDuration(180).start();
+        });
+        weatherHost.setOnClickListener(v -> {
+            sounds.select();
+            editWeatherCity();
+        });
+
+        weatherBody = new LinearLayout(this);
+        weatherBody.setOrientation(LinearLayout.HORIZONTAL);
+        weatherBody.setGravity(Gravity.CENTER_VERTICAL);
+        weatherBody.setBaselineAligned(false);
+
+        wxNowIcon = weatherIcon();
+        weatherBody.addView(wxNowIcon, new LinearLayout.LayoutParams(dp(32), dp(32)));
+
+        LinearLayout now = new LinearLayout(this);
+        now.setOrientation(LinearLayout.VERTICAL);
+        wxNowTemp = text("", 28, 0xFFFFFFFF, "sans-serif-thin");
+        wxNowCond = text("", 11, 0xD9FFFFFF, "sans-serif-medium");
+        wxNowCond.setSingleLine(true);
+        wxNowCond.setEllipsize(TextUtils.TruncateAt.END);
+        wxNowCond.setMaxWidth(dp(128));
+        wxPlace = text("", 9.5f, 0xA6FFFFFF, "sans-serif");
+        wxPlace.setSingleLine(true);
+        wxPlace.setMaxWidth(dp(128));
+        now.addView(wxNowTemp);
+        LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(-2, -2);
+        cl.topMargin = dp(1);
+        now.addView(wxNowCond, cl);
+        LinearLayout.LayoutParams pl = new LinearLayout.LayoutParams(-2, -2);
+        pl.topMargin = dp(1);
+        now.addView(wxPlace, pl);
+        LinearLayout.LayoutParams nl = new LinearLayout.LayoutParams(-2, -2);
+        nl.leftMargin = dp(8);
+        weatherBody.addView(now, nl);
+
+        View rule = new View(this);
+        rule.setBackgroundColor(0x40FFFFFF);
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(Math.max(1, dp(1)), dp(48));
+        rlp.leftMargin = dp(16);
+        rlp.rightMargin = dp(6);
+        rlp.gravity = Gravity.CENTER_VERTICAL;
+        weatherBody.addView(rule, rlp);
+
+        for (int i = 0; i < 3; i++) {
+            LinearLayout col = new LinearLayout(this);
+            col.setOrientation(LinearLayout.VERTICAL);
+            col.setGravity(Gravity.CENTER_HORIZONTAL);
+            wxDayLabel[i] = text("", 9, 0xD9FFFFFF, "sans-serif-medium");
+            caps(wxDayLabel[i], 0.12f);
+            wxDayIcon[i] = weatherIcon();
+            wxDayRange[i] = text("", 12, 0xFFFFFFFF, "sans-serif-medium");
+            wxDayRange[i].setSingleLine(true);
+            col.addView(wxDayLabel[i], new LinearLayout.LayoutParams(-2, -2));
+            LinearLayout.LayoutParams il = new LinearLayout.LayoutParams(dp(22), dp(22));
+            il.topMargin = dp(3);
+            il.gravity = Gravity.CENTER_HORIZONTAL;
+            col.addView(wxDayIcon[i], il);
+            LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(-2, -2);
+            rl.topMargin = dp(2);
+            col.addView(wxDayRange[i], rl);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+            lp.leftMargin = dp(12);
+            weatherBody.addView(col, lp);
+        }
+        for (TextView t : new TextView[] { wxNowTemp, wxNowCond, wxPlace, wxDayLabel[0], wxDayLabel[1],
+                wxDayLabel[2], wxDayRange[0], wxDayRange[1], wxDayRange[2] }) {
+            t.setShadowLayer(dp(5), 0, dp(1), 0x80000000);
+        }
+
+        weatherFallback = text("Add weather", 13, 0xFFFFFFFF, "sans-serif-medium");
+        weatherFallback.setShadowLayer(dp(5), 0, dp(1), 0x80000000);
+        weatherFallback.setVisibility(View.GONE);
+
+        weatherHost.addView(weatherBody, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER_VERTICAL));
+        weatherHost.addView(weatherFallback, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+        weatherHost.setVisibility(View.GONE);
+        return weatherHost;
+    }
+
+    private ImageView weatherIcon() {
+        ImageView icon = new ImageView(this);
+        icon.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
+        icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        return icon;
+    }
+
+    private void bindWeather(Weather.Snapshot s) {
+        if (weatherHost == null) return;
+        if (s == null || s.days == null || s.days.length < 3) {
+            weatherBody.setVisibility(View.GONE);
+            weatherFallback.setVisibility(View.VISIBLE);
+            weatherHost.setVisibility(View.VISIBLE);
+            weatherHost.setContentDescription("Add weather");
+            return;
+        }
+        weatherFallback.setVisibility(View.GONE);
+        weatherBody.setVisibility(View.VISIBLE);
+        weatherHost.setVisibility(View.VISIBLE);
+        wxNowIcon.setImageDrawable(Weather.Icon.forCode(s.code, s.isDay));
+        wxNowTemp.setText(s.temp + "°");
+        wxNowCond.setText(s.condition);
+        wxPlace.setText(s.place == null ? "" : s.place);
+        wxPlace.setVisibility(s.place == null || s.place.isEmpty() ? View.GONE : View.VISIBLE);
+        String where = s.place == null || s.place.isEmpty() ? "" : ", " + s.place;
+        weatherHost.setContentDescription("Weather, " + s.temp + " degrees, " + s.condition + where);
+        for (int i = 0; i < 3; i++) {
+            Weather.Day d = s.days[i];
+            wxDayLabel[i].setText(d.label);
+            wxDayIcon[i].setImageDrawable(Weather.Icon.forCode(d.code, true));
+            wxDayRange[i].setText(d.min + "° / " + d.max + "°");
+        }
+    }
+
+    private void editWeatherCity() {
+        if (menu != null && menu.isShowing()) return;
+        Dialog dialog = new Dialog(this, R.style.ZenDialog);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(18), dp(16), dp(18), dp(14));
+        box.setBackground(round(0xF21C1C1E, dp(18)));
+
+        TextView title = text("Weather city", 15, 0xFFFFFFFF, "sans-serif-medium");
+        title.setPadding(dp(6), 0, dp(6), dp(6));
+        box.addView(title);
+        String saved = weather.savedLabel();
+        if (saved != null && !saved.isEmpty()) {
+            TextView current = text(saved, 12, 0xB3FFFFFF, "sans-serif");
+            current.setPadding(dp(6), 0, dp(6), dp(10));
+            box.addView(current);
+        }
+
+        EditText et = new EditText(this);
+        et.setSingleLine(true);
+        et.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
+        et.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        et.setHint("City name");
+        et.setHintTextColor(0x66FFFFFF);
+        et.setTextColor(0xFFFFFFFF);
+        et.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        et.setPadding(dp(14), dp(10), dp(14), dp(10));
+        et.setBackground(round(0x33FFFFFF, dp(12)));
+        String city = prefs.getString("wx_city", "");
+        et.setText(city);
+        et.setSelection(et.getText().length());
+        box.addView(et, new LinearLayout.LayoutParams(-1, -2));
+
+        TextView credit = text("Forecast data: Open-Meteo.com", 9, 0x80FFFFFF, "sans-serif");
+        credit.setPadding(dp(6), dp(8), dp(6), dp(4));
+        box.addView(credit);
+
+        TextView status = text("", 11, 0xCCFFFFFF, "sans-serif");
+        status.setPadding(dp(6), dp(4), dp(6), 0);
+        status.setMinHeight(dp(18));
+
+        final boolean[] busy = { false };
+        Runnable submit = () -> {
+            if (busy[0]) return;
+            String q = et.getText().toString().trim();
+            if (q.isEmpty()) {
+                status.setText("Enter a city name");
+                return;
+            }
+            busy[0] = true;
+            status.setText("Looking up…");
+            sounds.select();
+            weather.findCity(q, new Weather.CityCallback() {
+                @Override public void found(String foundCity) {
+                    if (weatherBody.getVisibility() == View.VISIBLE) {
+                        wxPlace.setText(foundCity);
+                        wxPlace.setVisibility(View.VISIBLE);
+                        wxNowCond.setText("Updating");
+                    }
+                    if (dialog.isShowing()) dialog.dismiss();
+                    weather.refresh(true);
+                }
+                @Override public void failed() {
+                    busy[0] = false;
+                    if (dialog.isShowing()) status.setText("City not found, or no connection");
+                }
+            });
+        };
+        et.setOnEditorActionListener((v, action, event) -> {
+            if (action == EditorInfo.IME_ACTION_DONE) {
+                submit.run();
+                return true;
+            }
+            return false;
+        });
+
+        TextView save = dialogButton("Save", submit);
+        TextView cancel = dialogButton("Cancel", () -> {
+            sounds.select();
+            dialog.dismiss();
+        });
+        box.addView(save);
+        box.addView(cancel);
+        box.addView(status);
+
+        dialog.setContentView(box, new ViewGroup.LayoutParams(dp(340), -2));
+        dialogArmed = false;
+        dialog.setOnShowListener(d -> et.requestFocus());
+        dialog.show();
+        main.post(() -> dialogArmed = true);
+        if (dialog.getWindow() != null) dialog.getWindow().getDecorView().setSoundEffectsEnabled(false);
+    }
+
+    private boolean dialogArmed;
+
+    private TextView dialogButton(String label, Runnable action) {
+        TextView v = text(label, 13, 0xFFFFFFFF, "sans-serif-medium");
+        v.setPadding(dp(14), 0, dp(14), 0);
+        v.setGravity(Gravity.CENTER_VERTICAL);
+        v.setFocusable(true);
+        v.setBackground(round(0x00000000, dp(10)));
+        v.setOnFocusChangeListener((x, f) -> {
+            v.setBackground(round(f ? 0xFFFFFFFF : 0x00000000, dp(10)));
+            v.setTextColor(f ? 0xFF000000 : 0xFFFFFFFF);
+            if (f && dialogArmed) sounds.tick();
+        });
+        v.setSoundEffectsEnabled(false);
+        v.setOnClickListener(x -> action.run());
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(38));
+        lp.topMargin = dp(4);
+        v.setLayoutParams(lp);
+        return v;
+    }
+
+    /**
+     * How many apps sit on the first dock row before the next one starts.
+     * Each row holds up to six. Two through six favorites stay split across both rows;
+     * seven through twelve fill the top row first; more than twelve lengthens both
+     * rows and the glass scrolls.
+     */
+    private static int dockColumns(int count) {
+        if (count <= 1) return 1;
+        if (count <= DOCK_PER_ROW) return (count + 1) / 2;
+        if (count <= DOCK_PER_ROW * 2) return DOCK_PER_ROW;
+        return (count + 1) / 2;
+    }
+
+    /** Columns used to size tiles: six across, even when a longer row scrolls. */
+    private static int dockTileColumns(int count) {
+        return Math.min(DOCK_PER_ROW, dockColumns(count));
+    }
+
+    private static int dockRowCount(int count) {
+        return count > 1 ? 2 : 1;
+    }
+
+    private int dockPanelHeight() {
+        return dockRows * dockSlotH + Math.max(0, dockRows - 1) * dockGap + 2 * dockPadY;
+    }
+
+    /**
+     * Tiles grow to fill the glass, up to Apple-ish size, but never so tall that the two
+     * rows, the app name and the "all apps" hint fall off the first screen.
+     */
+    private void sizeDock(int columns, int rows) {
+        dockRows = Math.max(1, rows);
+        int n = Math.max(1, columns);
         int ring = 2 * AppTile.slotGap(density);
         int w = (dockViewportW - (n - 1) * dockGap) / n - ring;
-        dockW = Math.max(dp(92), Math.min(dp(150), w));
+        int chrome = dp(78);
+        int availH = screenH - headerH - chrome - 2 * dockPadY - Math.max(0, dockRows - 1) * dockGap;
+        int maxH = Math.max(dp(48), availH / dockRows - ring);
+        int cap = Math.min(dp(150), Math.round(maxH * 16f / 9f));
+        dockW = Math.max(dp(72), Math.min(cap, w));
         dockH = Math.round(dockW * 9f / 16f);
         dockSlotW = dockW + ring;
         dockSlotH = dockH + ring;
@@ -397,23 +726,51 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
     private void rebuild(String focusPkg, Boolean focusInDock) {
         List<AppRepo.App> docked = new ArrayList<>();
         for (String pkg : dock) if (apps.containsKey(pkg)) docked.add(apps.get(pkg));
-        sizeDock(docked.size());
+        int cols = dockColumns(docked.size());
+        sizeDock(dockTileColumns(docked.size()), dockRowCount(docked.size()));
         dockRow.removeAllViews();
-        for (AppRepo.App a : docked) {
-            AppTile t = tile(a, true);
+        LinearLayout line = null;
+        for (int i = 0; i < docked.size(); i++) {
+            if (i % cols == 0) {
+                line = new LinearLayout(this);
+                line.setOrientation(LinearLayout.HORIZONTAL);
+                line.setClipChildren(false);
+                LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(-2, -2);
+                if (dockRow.getChildCount() > 0) rl.topMargin = dockGap;
+                dockRow.addView(line, rl);
+            }
+            if (line == null) continue;
+            AppTile t = tile(docked.get(i), true);
             t.setId(View.generateViewId());
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
-            if (dockRow.getChildCount() > 0) lp.leftMargin = dockGap;
-            dockRow.addView(t, lp);
+            if (i % cols != 0) lp.leftMargin = dockGap;
+            line.addView(t, lp);
         }
-        // Like Apple TV, the dock's ends are a stop: ◀ / ▶ never jump into the grid.
-        if (dockRow.getChildCount() > 0) {
-            View first = dockRow.getChildAt(0), last = dockRow.getChildAt(dockRow.getChildCount() - 1);
+        // Like Apple TV, each row's ends are a stop: ◀ / ▶ never wrap, and ▼ from the
+        // top row lands on the app directly below it.
+        for (int r = 0; r < dockRow.getChildCount(); r++) {
+            ViewGroup row = (ViewGroup) dockRow.getChildAt(r);
+            if (row.getChildCount() == 0) continue;
+            View first = row.getChildAt(0), last = row.getChildAt(row.getChildCount() - 1);
             first.setNextFocusLeftId(first.getId());
             last.setNextFocusRightId(last.getId());
         }
+        if (dockRow.getChildCount() == 2) {
+            ViewGroup top = (ViewGroup) dockRow.getChildAt(0);
+            ViewGroup bot = (ViewGroup) dockRow.getChildAt(1);
+            int n = Math.min(top.getChildCount(), bot.getChildCount());
+            for (int c = 0; c < n; c++) {
+                View above = top.getChildAt(c), below = bot.getChildAt(c);
+                above.setNextFocusDownId(below.getId());
+                below.setNextFocusUpId(above.getId());
+            }
+            if (n > 0 && top.getChildCount() > n) {
+                int fallback = bot.getChildAt(n - 1).getId();
+                for (int c = n; c < top.getChildCount(); c++) top.getChildAt(c).setNextFocusDownId(fallback);
+            }
+        }
         ViewGroup.LayoutParams pl = dockPanel.getLayoutParams();
-        pl.height = dockSlotH + 2 * dockPadY;
+        pl.height = dockPanelHeight();
         dockPanel.setLayoutParams(pl);
         dockEmpty.setVisibility(docked.isEmpty() ? View.VISIBLE : View.GONE);
         if (docked.isEmpty()) dockName.setText("");
@@ -638,7 +995,10 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
     }
 
     private View firstDockTileOrGrid() {
-        if (dockRow.getChildCount() > 0) return dockRow.getChildAt(0);
+        if (dockRow.getChildCount() > 0) {
+            ViewGroup row = (ViewGroup) dockRow.getChildAt(0);
+            if (row.getChildCount() > 0) return row.getChildAt(0);
+        }
         if (grid.getChildCount() > 0) return ((ViewGroup) grid.getChildAt(0)).getChildAt(0);
         return null;
     }
@@ -650,9 +1010,12 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
 
     private AppTile findTile(String pkg, Boolean inDock) {
         if (inDock == null || inDock) {
-            for (int i = 0; i < dockRow.getChildCount(); i++) {
-                View c = dockRow.getChildAt(i);
-                if (c instanceof AppTile && ((AppTile) c).pkg.equals(pkg)) return (AppTile) c;
+            for (int r = 0; r < dockRow.getChildCount(); r++) {
+                ViewGroup row = (ViewGroup) dockRow.getChildAt(r);
+                for (int i = 0; i < row.getChildCount(); i++) {
+                    View c = row.getChildAt(i);
+                    if (c instanceof AppTile && ((AppTile) c).pkg.equals(pkg)) return (AppTile) c;
+                }
             }
         }
         if (inDock == null || !inDock) {
@@ -756,7 +1119,8 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
         moving = t;
         t.requestFocus();
         t.setWiggling(true);
-        moveHint.setText(t.inDock ? "◀ ▶  move    ·    OK  done" : "◀ ▶ ▲ ▼  move    ·    OK  done");
+        boolean flat = t.inDock && dockRowCount(dock.size()) == 1;
+        moveHint.setText(flat ? "◀ ▶  move    ·    OK  done" : "◀ ▶ ▲ ▼  move    ·    OK  done");
         moveHint.setVisibility(View.VISIBLE);
     }
 
@@ -800,8 +1164,12 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
             switch (e.getKeyCode()) {
                 case KeyEvent.KEYCODE_DPAD_LEFT: shift(-1); break;
                 case KeyEvent.KEYCODE_DPAD_RIGHT: shift(1); break;
-                case KeyEvent.KEYCODE_DPAD_UP: if (!moving.inDock) shift(-COLUMNS); break;
-                case KeyEvent.KEYCODE_DPAD_DOWN: if (!moving.inDock) shift(COLUMNS); break;
+                case KeyEvent.KEYCODE_DPAD_UP:
+                    shift(moving.inDock ? -dockColumns(dock.size()) : -COLUMNS);
+                    break;
+                case KeyEvent.KEYCODE_DPAD_DOWN:
+                    shift(moving.inDock ? dockColumns(dock.size()) : COLUMNS);
+                    break;
                 default:
                     if (e.getRepeatCount() == 0) {
                         AppTile t = moving;
@@ -1009,7 +1377,7 @@ public final class HomeActivity extends Activity implements WallpaperView.Listen
         }
     }
 
-    /** Horizontal LinearLayout that is as wide as its content; the dock scrolls by translation. */
+    /** LinearLayout that is as wide as its content; the two dock rows scroll together by translation. */
     static final class WideLayout extends LinearLayout {
         WideLayout(Context c) { super(c); }
         @Override protected void onMeasure(int w, int h) {
